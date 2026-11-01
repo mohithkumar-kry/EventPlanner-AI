@@ -70,9 +70,13 @@ function enforceRateLimit(key, limit, windowMs) {
 function allowAppOrigin(req, res) {
   const origin = req.headers.origin;
   if (!origin) return;
-  const expected = process.env.APP_ORIGIN ? new URL(process.env.APP_ORIGIN).origin : `http://localhost:${port}`;
-  if (origin && origin === expected) {
-    res.setHeader('access-control-allow-origin', expected);
+  const allowed = new Set(process.env.APP_ORIGIN ? [new URL(process.env.APP_ORIGIN).origin] : []);
+  if (!process.env.K_SERVICE) {
+    allowed.add(`http://localhost:${port}`);
+    allowed.add(`http://127.0.0.1:${port}`);
+  }
+  if (allowed.has(origin)) {
+    res.setHeader('access-control-allow-origin', origin);
     res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
     res.setHeader('access-control-allow-headers', 'Content-Type');
     res.setHeader('vary', 'Origin');
@@ -176,7 +180,7 @@ const server = http.createServer(async (req, res) => {
       if (!message) return json(res, 400, { error: 'Type a question first.' });
       const history = Array.isArray(body.history) ? body.history.slice(-8).map(item => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '').slice(0, 2500) })) : [];
       const key = process.env.OPENAI_API_KEY;
-      if (!key) { const error = new Error('AI isn’t connected yet. Add your OpenAI API key to outputs/.env, then restart EventCraft.'); error.status = 503; throw error; }
+      if (!key) { const error = new Error('AI is not configured yet. Add OPENAI_API_KEY to your local .env file, then restart EventCraft.'); error.status = 503; throw error; }
       const instructions = 'You are EventCraft AI, a warm, practical event-planning assistant. Help with weddings, birthdays, and community events. Use the supplied task list and active event as the source of truth. If user asks you to add, edit, complete, or delete a task, call the matching function. If the user asks to create a plan/event, call add_event and then explain the plan will be generated. If they ask to update the event, call update_event. Use navigate_calendar for explicit requests to open a date or view. Never claim a change happened unless you called a tool. For advice, keep it actionable and concise. Cost figures are estimates. You have no live hotel/vendor inventory; do not invent business names or current prices. For hotel or vendor requests, explain that this demo has no live listings and never present sample names, prices, or availability as real. Ask for a city if local context would help.';
       const context = JSON.stringify({ activeEvent: body.event || null, tasks: (Array.isArray(body.tasks) ? body.tasks : []).slice(0, 80), calendar: body.calendar || null, message });
       let input = [...history, { role: 'user', content: context }], actions = [], answer = '';
@@ -200,10 +204,9 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { answer: answer || 'I prepared the requested changes for your calendar.', actions });
     }
-    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/api-config.js')) {
-      const file = url.pathname === '/api-config.js' ? 'api-config.js' : 'index.html';
-      const content = await readFile(join(root, file));
-      res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      const content = await readFile(join(root, 'index.html'));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(content);
     }
     return json(res, 404, { error: 'Not found.' });
@@ -214,4 +217,5 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, '0.0.0.0', () => console.log(`EventCraft is listening on port ${port}`));
+const host = process.env.K_SERVICE ? '0.0.0.0' : '127.0.0.1';
+server.listen(port, host, () => console.log(`EventCraft is listening at http://${host}:${port}`));

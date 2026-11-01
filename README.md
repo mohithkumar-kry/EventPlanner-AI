@@ -1,63 +1,89 @@
 # EventCraft AI
 
-EventCraft helps plan weddings, birthdays, and community events with AI generated budgets, schedules, vendor checklists, and personalized ideas. The app has no sign-in. Plans and profile details save in the current browser on the current device using local storage; they do not sync to another browser or device.
+EventCraft helps people organize weddings, birthdays, and community events. It can create an AI-generated budget, timeline, vendor checklist, and ideas, and the assistant can add or update calendar tasks.
 
-## How hosting works
+## Run EventCraft on your computer
 
-GitHub Pages hosts the website. It cannot safely run the AI server or hold an OpenAI secret, so the AI runs as a small Node service on Google Cloud Run. The browser sends AI requests to that service. The app never includes the OpenAI key.
+Each person running the app needs Node.js and their own OpenAI API key. Never share or publish an API key.
 
-## Run it on your computer
+### 1. Install Node.js
 
-1. Install Node.js 20 or newer.
-2. Copy `.env.example` to `.env` and add your OpenAI API key.
-3. In this folder, run `npm start` and open `http://localhost:4173`.
-
-Keep `.env` private. It is ignored by Git.
-
-## Put the site on GitHub Pages
-
-1. Create a GitHub repository and push the contents of this `outputs` folder.
-2. In GitHub, open **Settings → Pages** and set the build and deployment source to **GitHub Actions**.
-3. Push to the `main` branch. The included workflow publishes only `index.html` and `api-config.js`.
-
-## Turn on AI for the public site
-
-The Cloud Run service and OpenAI key need to be configured once. GitHub Pages by itself cannot run AI.
-
-1. Create or select a Google Cloud project, enable billing and Cloud Run, and install the Google Cloud CLI (`gcloud`).
-2. In Google Cloud Console, create a Secret Manager secret named `eventcraft-openai-key` and add your OpenAI key as its first version. Grant the Cloud Run service identity **Secret Manager Secret Accessor** for that secret.
-3. Set the active Google Cloud project and deploy the server from this folder. Replace the sample GitHub username with yours:
+Install the current **LTS** version of Node.js from [nodejs.org](https://nodejs.org/en/download/). After installation, close and reopen PowerShell. Confirm it is available:
 
 ```powershell
-gcloud config set project YOUR-GOOGLE-CLOUD-PROJECT-ID
-gcloud run deploy eventcraft-api `
-  --source . `
-  --region asia-south1 `
-  --allow-unauthenticated `
-  --max 3 `
-  --set-env-vars "APP_ORIGIN=https://YOUR-USERNAME.github.io,OPENAI_MODEL=gpt-6-luna" `
-  --set-secrets "OPENAI_API_KEY=eventcraft-openai-key:latest"
+node --version
+npm --version
 ```
 
-4. Copy the service URL printed by Cloud Run. Edit `api-config.js` to set it, with no trailing slash:
+### 2. Get the app
 
-```js
-window.EVENTCRAFT_API_BASE = 'https://YOUR-CLOUD-RUN-SERVICE-URL';
+Either download the repository ZIP from GitHub (**Code → Download ZIP**) and extract it, or clone it with Git:
+
+```powershell
+git clone https://github.com/mohithkumar-kry/EventPlanner-AI.git
+cd EventPlanner-AI
 ```
 
-5. Commit and push `api-config.js`. GitHub Actions publishes the updated site. `APP_ORIGIN` must exactly match the website origin (for a GitHub Pages project site, it is still `https://YOUR-USERNAME.github.io`).
-6. Visit `https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/`. Check `https://YOUR-CLOUD-RUN-SERVICE-URL/api/health`; it should report `"ready":true` and `"ai":true`.
+If you downloaded the ZIP, open PowerShell in the extracted `EventPlanner-AI` folder instead.
 
-When changing `server.mjs`, redeploy Cloud Run. When changing the interface or `api-config.js`, push to GitHub.
+### 3. Add your private API key
 
-## Important limits
+Create an API key in your OpenAI API account. API usage is billed separately and may cost money. Follow OpenAI’s [API key instructions](https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key).
 
-- Browser data is local to one browser/device. Clearing browser storage removes those plans. There is no account recovery or cloud backup.
-- AI needs a valid OpenAI API key, an active API account, and available usage/quota. No hosted AI can work without those external services and credentials.
-- AI generated budgets are estimates. Confirm all prices, venue/vendor availability, and local requirements directly.
-- Vendor map/listings in this demo are fictional sample data, not verified nearby businesses.
-- The AI endpoint is public so the no-login website can use it. It has basic per-instance request limits, but those are not a complete abuse or cost-control system. Configure provider spending limits and add a managed CAPTCHA or gateway before sharing widely.
+In PowerShell, from the project folder:
 
-## Files to push
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
 
-From this `outputs` folder, run `git add .`, check `git status`, then commit and push to `main`. `.env` is ignored by Git. Do not push `.env` or any OpenAI API key. The Pages workflow deliberately publishes only the two browser files.
+In Notepad, replace `replace_with_your_openai_secret` after `OPENAI_API_KEY=` with your own key, save, and close Notepad. Do not add the key to `index.html`, GitHub, screenshots, or messages. `.env` is excluded from Git; `.env.example` contains only a placeholder.
+
+### 4. Start the app
+
+Double-click **Start EventCraft.bat**, or run this in PowerShell:
+
+```powershell
+npm start
+```
+
+Keep the server window open and visit **http://localhost:4173**. Close the window to stop EventCraft. The website and AI server both run on your computer; the server sends AI requests to OpenAI while keeping your key out of browser code.
+
+## Upload updates to GitHub
+
+From the project folder:
+
+```powershell
+git add .
+git status
+```
+
+Check that `.env` is not listed. Then upload:
+
+```powershell
+git commit -m "Update EventCraft"
+git push origin main
+```
+
+## How EventCraft works
+
+- **Website:** `index.html` contains the responsive interface and interactions.
+- **Local server:** `server.mjs` serves the site and receives AI requests. It listens only on this computer (`127.0.0.1`) by default.
+- **AI:** The local server reads `OPENAI_API_KEY` from `.env` and calls OpenAI’s Responses API. The key is never sent to the webpage.
+- **Planning:** When someone submits an event, the AI builds a structured budget, date-based timeline, vendor checklist, and ideas. The app adds the generated timeline and checklist to its calendar.
+- **Assistant actions:** The assistant can request task or event changes using defined tools. The webpage applies those changes and saves them locally.
+- **Storage:** Events, tasks, profile details, and expenses use browser local storage. They stay in that browser on that computer and are not synchronized or backed up online.
+
+## Presentation explanation
+
+> “EventCraft is an AI event-planning assistant for weddings, birthdays, and community events. You enter the event details, and it creates a budget, timeline, vendor checklist, and personalized ideas. You can also ask the assistant to add or change calendar tasks. The app runs on this computer: the browser talks to a local server, and that server calls the AI while keeping the API key private. Plans are saved in this browser, so there’s no sign-in, and they don’t sync to other devices.”
+
+## Troubleshooting and limits
+
+- **`node` is not recognized:** install Node.js LTS, then reopen PowerShell.
+- **Port 4173 is already in use:** close the other EventCraft server window, then start it again.
+- **AI says the key is missing or invalid:** check the `.env` spelling and key, then restart the server. Ensure the OpenAI API account can make API calls and has available usage.
+- **Data is missing on another computer/browser:** data is saved only in the browser where it was entered.
+- The sample vendor finder uses fictional listings and pins. It does not show actual nearby providers.
+- AI prices are estimates. Confirm vendor pricing and availability directly.
+- This setup is for a local presentation or personal demo. It is not a public production service: it has no hosted backend, accounts, cloud backups, or multi-device data sync. GitHub stores and distributes the source code; each person runs the app locally and supplies their own key.
