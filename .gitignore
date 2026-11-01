@@ -1,1 +1,6 @@
 .env
+.env.*
+!.env.example
+node_modules/
+.firebase/
+*.log

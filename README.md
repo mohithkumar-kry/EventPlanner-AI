@@ -1,51 +1,63 @@
 # EventCraft AI
 
-EventCraft is a responsive event-planning app for weddings, birthdays, and community events. It can generate a budget, timeline, vendor checklist, and personalized ideas. The built-in vendor map is a **fictional demo** with sample names and illustrated pins; it does not show real businesses or locations.
+EventCraft helps plan weddings, birthdays, and community events with AI generated budgets, schedules, vendor checklists, and personalized ideas. The app has no sign-in. Plans and profile details save in the current browser on the current device using local storage; they do not sync to another browser or device.
 
-The AI assistant can add, edit, complete, and remove calendar tasks; create or update the active event plan; and open requested calendar dates or views. Event data, checklist completion, profile details, and logged expenses are currently saved in this browser. Sign-in is a prototype, not secure account authentication.
+## How hosting works
 
-## Run the app on Windows
+GitHub Pages hosts the website. It cannot safely run the AI server or hold an OpenAI secret, so the AI runs as a small Node service on Google Cloud Run. The browser sends AI requests to that service. The app never includes the OpenAI key.
+
+## Run it on your computer
 
 1. Install Node.js 20 or newer.
-2. Open PowerShell in this `outputs` folder.
-3. Copy the example settings into a private local `.env` file:
+2. Copy `.env.example` to `.env` and add your OpenAI API key.
+3. In this folder, run `npm start` and open `http://localhost:4173`.
 
-   ```powershell
-   Copy-Item .env.example .env
-   notepad .env
-   ```
+Keep `.env` private. It is ignored by Git.
 
-4. Create an OpenAI API key in the [OpenAI API platform](https://platform.openai.com/api-keys), then set `OPENAI_API_KEY=your_key_here` in `.env`. Keep the key private. The full secret is shown only when created, and OpenAI recommends keeping keys on the backend rather than in browser code.
-5. Save `.env`, then run:
+## Put the site on GitHub Pages
 
-   ```powershell
-   node server.mjs
-   ```
+1. Create a GitHub repository and push the contents of this `outputs` folder.
+2. In GitHub, open **Settings → Pages** and set the build and deployment source to **GitHub Actions**.
+3. Push to the `main` branch. The included workflow publishes only `index.html` and `api-config.js`.
 
-6. Open `http://localhost:4173` in your browser. Use **Checklist → Find nearby** to open the fictional demo vendor map.
+## Turn on AI for the public site
 
-The AI features use the OpenAI API, not a ChatGPT subscription; API billing is separate. API use can incur charges. The template uses `gpt-6-luna` as a cost-conscious default; change `OPENAI_MODEL` in `.env` if you want another model available to your API project. OpenAI API key help: [find or create an API key](https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key) and [keep it safe](https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety). See the [official model catalog](https://developers.openai.com/api/docs/models) for current model IDs and capabilities.
+The Cloud Run service and OpenAI key need to be configured once. GitHub Pages by itself cannot run AI.
 
-## Upload the app to GitHub
-
-Create an **empty repository** on GitHub first. Then, in PowerShell, go to this `outputs` folder and run the commands below. Replace the URL with the HTTPS URL of your new GitHub repository.
+1. Create or select a Google Cloud project, enable billing and Cloud Run, and install the Google Cloud CLI (`gcloud`).
+2. In Google Cloud Console, create a Secret Manager secret named `eventcraft-openai-key` and add your OpenAI key as its first version. Grant the Cloud Run service identity **Secret Manager Secret Accessor** for that secret.
+3. Set the active Google Cloud project and deploy the server from this folder. Replace the sample GitHub username with yours:
 
 ```powershell
-cd "C:\Users\mohit\Documents\Codex\2026-10-23\claude-i-need-u-to-create\outputs"
-git init -b main
-git add index.html server.mjs README.md .gitignore .env.example "Start EventCraft.bat"
-git status
-git commit -m "Initial EventCraft AI app"
-git remote add origin https://github.com/YOUR-USERNAME/YOUR-REPOSITORY.git
-git push -u origin main
+gcloud config set project YOUR-GOOGLE-CLOUD-PROJECT-ID
+gcloud run deploy eventcraft-api `
+  --source . `
+  --region asia-south1 `
+  --allow-unauthenticated `
+  --max 3 `
+  --set-env-vars "APP_ORIGIN=https://YOUR-USERNAME.github.io,OPENAI_MODEL=gpt-6-luna" `
+  --set-secrets "OPENAI_API_KEY=eventcraft-openai-key:latest"
 ```
 
-Before the commit, `git status` should **not** list `.env`. `.gitignore` excludes it. If Git asks you to identify yourself, set your name and email using the `git config --global user.name` and `git config --global user.email` commands Git prints or prompts for.
+4. Copy the service URL printed by Cloud Run. Edit `api-config.js` to set it, with no trailing slash:
 
-GitHub stores the project files. GitHub Pages can publish static HTML, CSS, and JavaScript, but it cannot run this Node server; the AI endpoints need a Node hosting service. When deploying the full app, connect that service to the GitHub repository and set `OPENAI_API_KEY` as a private environment variable in the hosting dashboard. Do not commit it to GitHub or put it into `index.html`.
+```js
+window.EVENTCRAFT_API_BASE = 'https://YOUR-CLOUD-RUN-SERVICE-URL';
+```
 
-## Current demo limits
+5. Commit and push `api-config.js`. GitHub Actions publishes the updated site. `APP_ORIGIN` must exactly match the website origin (for a GitHub Pages project site, it is still `https://YOUR-USERNAME.github.io`).
+6. Visit `https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/`. Check `https://YOUR-CLOUD-RUN-SERVICE-URL/api/health`; it should report `"ready":true` and `"ai":true`.
 
-- The map and vendor records are fictional sample content, clearly labeled in the UI.
-- Profile and planning data stay in this browser; there is no cloud account sync.
-- Sign-in is visual only. A real public launch needs secure authentication, a database, and production monitoring.
+When changing `server.mjs`, redeploy Cloud Run. When changing the interface or `api-config.js`, push to GitHub.
+
+## Important limits
+
+- Browser data is local to one browser/device. Clearing browser storage removes those plans. There is no account recovery or cloud backup.
+- AI needs a valid OpenAI API key, an active API account, and available usage/quota. No hosted AI can work without those external services and credentials.
+- AI generated budgets are estimates. Confirm all prices, venue/vendor availability, and local requirements directly.
+- Vendor map/listings in this demo are fictional sample data, not verified nearby businesses.
+- The AI endpoint is public so the no-login website can use it. It has basic per-instance request limits, but those are not a complete abuse or cost-control system. Configure provider spending limits and add a managed CAPTCHA or gateway before sharing widely.
+
+## Files to push
+
+From this `outputs` folder, run `git add .`, check `git status`, then commit and push to `main`. `.env` is ignored by Git. Do not push `.env` or any OpenAI API key. The Pages workflow deliberately publishes only the two browser files.

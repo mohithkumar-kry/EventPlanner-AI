@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
+const requestWindows = new Map();
 
 try {
   const envText = await readFile(join(root, '.env'), 'utf8');
@@ -43,14 +44,45 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req) {
+async function readBody(req, maxBytes = 24_000) {
   let raw = '';
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 24_000) throw new Error('Request is too large.');
+    if (raw.length > maxBytes) { const error = new Error('Request is too large.'); error.status = 413; throw error; }
   }
   try { return JSON.parse(raw || '{}'); } catch { throw new Error('Please send valid JSON.'); }
 }
+
+function setSecurityHeaders(res) {
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('x-frame-options', 'DENY');
+  res.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+  res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+}
+
+function enforceRateLimit(key, limit, windowMs) {
+  const now = Date.now(), recent = (requestWindows.get(key) || []).filter(time => now - time < windowMs);
+  if (recent.length >= limit) { const error = new Error('You have made several AI requests. Please wait a little and try again.'); error.status = 429; throw error; }
+  recent.push(now); requestWindows.set(key, recent);
+  if (requestWindows.size > 10_000) for (const [id, times] of requestWindows) if (!times.some(time => now - time < 15 * 60_000)) requestWindows.delete(id);
+}
+
+function allowAppOrigin(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return;
+  const expected = process.env.APP_ORIGIN ? new URL(process.env.APP_ORIGIN).origin : `http://localhost:${port}`;
+  if (origin && origin === expected) {
+    res.setHeader('access-control-allow-origin', expected);
+    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    res.setHeader('access-control-allow-headers', 'Content-Type');
+    res.setHeader('vary', 'Origin');
+    return;
+  }
+  const error = new Error('This EventCraft API is not configured for this website address. Set APP_ORIGIN to your GitHub Pages site URL.');
+  error.status = 403;
+  throw error;
+}
+
 
 function validateEvent(event) {
   const title = String(event?.title || '').trim().slice(0, 100);
@@ -76,7 +108,7 @@ function extractText(response) {
 async function askOpenAI({ input, schemaName }) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) {
-    const error = new Error('AI isn’t connected yet. Add your OpenAI API key to outputs/.env, then restart EventCraft.');
+    const error = new Error('AI is not configured on the EventCraft server yet. Add OPENAI_API_KEY to its environment or Secret Manager.');
     error.status = 503;
     throw error;
   }
@@ -87,7 +119,7 @@ async function askOpenAI({ input, schemaName }) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(response.status === 401 ? 'The OpenAI API key was rejected. Check the key in outputs/.env.' : response.status === 429 ? 'The AI service is busy or the API account has reached its limit. Try again shortly.' : `AI request failed (${response.status}). Check the server output and try again.`);
+    const error = new Error(response.status === 401 ? 'The OpenAI API key was rejected. Check the server secret.' : response.status === 429 ? 'The AI service is busy or the API account has reached its limit. Try again shortly.' : `AI request failed (${response.status}). Check the server output and try again.`);
     error.status = response.status === 401 ? 401 : response.status === 429 ? 429 : 502;
     console.error('OpenAI API error:', data.error?.message || response.statusText);
     throw error;
@@ -103,8 +135,15 @@ async function askOpenAI({ input, schemaName }) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ready: Boolean(process.env.OPENAI_API_KEY) });
+    setSecurityHeaders(res);
+    if (url.pathname.startsWith('/api/')) allowAppOrigin(req, res);
+    if (req.method === 'OPTIONS' && url.pathname.startsWith('/api/')) { res.writeHead(204); return res.end(); }
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      const ai = Boolean(process.env.OPENAI_API_KEY);
+      return json(res, ai ? 200 : 503, { ready: ai, ai });
+    }
     if (req.method === 'POST' && url.pathname === '/api/plan') {
+      enforceRateLimit(`${req.socket.remoteAddress}:plan`, 12, 15 * 60_000);
       const event = validateEvent(await readBody(req));
       const plan = await askOpenAI({ schemaName: 'eventcraft_plan', input: [
         { role: 'system', content: 'You are EventCraft AI, a careful event-planning assistant. Create practical, personalized plans for weddings, birthdays, and community events. Use the exact supplied event date and local context. All budget line amounts must be nonnegative whole numbers and sum exactly to the supplied budget. Timeline dueDate values must be YYYY-MM-DD and on or before the event date. Create useful, realistically spaced planning tasks, vendor questions, and distinctive ideas based on preferences. Never claim to have verified local prices or vendor availability. All amounts use the currency supplied by the user.' },
@@ -131,6 +170,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { plan });
     }
     if (req.method === 'POST' && url.pathname === '/api/assistant') {
+      enforceRateLimit(`${req.socket.remoteAddress}:assistant`, 30, 15 * 60_000);
       const body = await readBody(req);
       const message = String(body.message || '').trim().slice(0, 2500);
       if (!message) return json(res, 400, { error: 'Type a question first.' });
@@ -148,7 +188,7 @@ const server = http.createServer(async (req, res) => {
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const error = new Error(response.status === 401 ? 'The OpenAI API key was rejected. Check outputs/.env.' : response.status === 429 ? 'The AI service is busy or the API account has reached its limit. Try again shortly.' : `AI request failed (${response.status}).`);
+          const error = new Error(response.status === 401 ? 'The OpenAI API key was rejected. Check the server secret.' : response.status === 429 ? 'The AI service is busy or the API account has reached its limit. Try again shortly.' : `AI request failed (${response.status}).`);
           error.status = response.status === 401 ? 401 : response.status === 429 ? 429 : 502;
           console.error('OpenAI API error:', data.error?.message || response.statusText); throw error;
         }
@@ -160,9 +200,11 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 200, { answer: answer || 'I prepared the requested changes for your calendar.', actions });
     }
-    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
-      const html = await readFile(join(root, 'index.html'));
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); return res.end(html);
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/api-config.js')) {
+      const file = url.pathname === '/api-config.js' ? 'api-config.js' : 'index.html';
+      const content = await readFile(join(root, file));
+      res.writeHead(200, { 'content-type': file.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(content);
     }
     return json(res, 404, { error: 'Not found.' });
   } catch (error) {

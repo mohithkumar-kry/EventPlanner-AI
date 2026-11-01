@@ -1,0 +1,1 @@
+window.EVENTCRAFT_API_BASE = '';
